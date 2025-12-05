@@ -1,128 +1,150 @@
-
-import socket
-import threading
-import json
-import hashlib
 import os
+import json
 import time
+import hashlib
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import uvicorn
 
 PORT = int(os.environ.get("PORT", "10000"))
 SERVER_TICK = 30
 
-PLAYERS = {}
-CLIENTS = {}
-LOCK = threading.Lock()
+app = FastAPI()
+
+PLAYERS = {}   # pseudo -> player data
+CLIENTS = {}   # pseudo -> websocket
+LOCK = asyncio.Lock()
 
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
-def handle_client(conn):
-    global PLAYERS, CLIENTS
 
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    pseudo = None
+
+    # ----------------------
+    # AUTH PART
+    # ----------------------
     try:
-        raw = conn.recv(4096).decode()
+        raw = await ws.receive_text()
         login = json.loads(raw)
 
         pseudo = login["pseudo"]
         password = login["password"]
         register = login["register"]
 
-        if register:
-            if pseudo in PLAYERS:
-                conn.send(json.dumps({"auth": "EXISTS"}).encode())
-                conn.close()
-                return
+        async with LOCK:
+            if register:
+                if pseudo in PLAYERS:
+                    await ws.send_text(json.dumps({"auth": "EXISTS"}))
+                    await ws.close()
+                    return
 
-            PLAYERS[pseudo] = {
-                "password": hash_pw(password),
-                "x": 0, "y": 1, "z": 0,
-                "pv": 100, "mana": 50, "endu": 80,
-                "inventory": []
-            }
-            conn.send(json.dumps({"auth": "OK"}).encode())
+                PLAYERS[pseudo] = {
+                    "password": hash_pw(password),
+                    "x": 0, "y": 1, "z": 0,
+                    "pv": 100,
+                    "mana": 50,
+                    "endu": 80,
+                    "inventory": []
+                }
+                await ws.send_text(json.dumps({"auth": "OK"}))
 
-        else:
-            if pseudo not in PLAYERS:
-                conn.send(json.dumps({"auth": "NOUSER"}).encode())
-                conn.close()
-                return
+            else:
+                if pseudo not in PLAYERS:
+                    await ws.send_text(json.dumps({"auth": "NOUSER"}))
+                    await ws.close()
+                    return
 
-            if PLAYERS[pseudo]["password"] != hash_pw(password):
-                conn.send(json.dumps({"auth": "BADPW"}).encode())
-                conn.close()
-                return
+                if PLAYERS[pseudo]["password"] != hash_pw(password):
+                    await ws.send_text(json.dumps({"auth": "BADPW"}))
+                    await ws.close()
+                    return
 
-            conn.send(json.dumps({"auth": "OK"}).encode())
+                await ws.send_text(json.dumps({"auth": "OK"}))
+
+            CLIENTS[pseudo] = ws
+            print(f"[+] {pseudo} connecté")
 
     except Exception as e:
         print("Auth error:", e)
-        conn.close()
+        await ws.close()
         return
 
-    CLIENTS[conn] = pseudo
-    print(f"[+] {pseudo} connecté")
-
-    buffer = ""
+    # ----------------------
+    # RECEIVE LOOP
+    # ----------------------
     try:
         while True:
-            chunk = conn.recv(4096).decode()
-            if not chunk:
-                break
+            data = await ws.receive_text()
+            try:
+                packet = json.loads(data)
+            except:
+                continue
 
-            buffer += chunk
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                if not line.strip():
-                    continue
+            async with LOCK:
+                PLAYERS[pseudo]["x"] = packet.get("x", PLAYERS[pseudo]["x"])
+                PLAYERS[pseudo]["y"] = packet.get("y", PLAYERS[pseudo]["y"])
+                PLAYERS[pseudo]["z"] = packet.get("z", PLAYERS[pseudo]["z"])
 
-                try:
-                    packet = json.loads(line)
-                except:
-                    continue
-
-                with LOCK:
-                    PLAYERS[pseudo]["x"] = packet.get("x", PLAYERS[pseudo]["x"])
-                    PLAYERS[pseudo]["y"] = packet.get("y", PLAYERS[pseudo]["y"])
-                    PLAYERS[pseudo]["z"] = packet.get("z", PLAYERS[pseudo]["z"])
-
-    except:
+    except WebSocketDisconnect:
         pass
+    except Exception as e:
+        print("Recv error:", e)
 
-    print(f"[-] {pseudo} déconnecté")
-    del CLIENTS[conn]
-    conn.close()
+    # ----------------------
+    # DISCONNECT CLEANUP
+    # ----------------------
+    async with LOCK:
+        if pseudo in CLIENTS:
+            del CLIENTS[pseudo]
+        print(f"[-] {pseudo} déconnecté")
 
-def broadcast_loop():
+
+# --------------------------
+# BROADCAST LOOP
+# --------------------------
+async def broadcast_loop():
     while True:
-        with LOCK:
+        await asyncio.sleep(1 / SERVER_TICK)
+
+        async with LOCK:
             data = {
                 "players": {
-                    p: {"x": PLAYERS[p]["x"], "y": PLAYERS[p]["y"], "z": PLAYERS[p]["z"]}
+                    p: {
+                        "x": PLAYERS[p]["x"],
+                        "y": PLAYERS[p]["y"],
+                        "z": PLAYERS[p]["z"]
+                    }
                     for p in PLAYERS
                 }
             }
 
-        msg = (json.dumps(data) + "\n").encode()
+        msg = json.dumps(data)
 
-        for conn in list(CLIENTS.keys()):
+        remove = []
+        for pseudo, ws in CLIENTS.items():
             try:
-                conn.sendall(msg)
+                await ws.send_text(msg)
             except:
-                pass
+                remove.append(pseudo)
 
-        time.sleep(1 / SERVER_TICK)
+        async with LOCK:
+            for p in remove:
+                if p in CLIENTS:
+                    del CLIENTS[p]
 
-def start():
-    print("[*] Render server online on port", PORT)
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("0.0.0.0", PORT))
-    s.listen()
+@app.on_event("startup")
+async def startup_event():
+    print(f"[*] WebSocket server listening on port {PORT}")
+    asyncio.create_task(broadcast_loop())
 
-    threading.Thread(target=broadcast_loop, daemon=True).start()
 
-    while True:
-        conn, addr = s.accept()
-        threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
-
-start()
+# --------------------------
+# START FASTAPI UVICORN
+# --------------------------
+if __name__ == "__main__":
+    uvicorn.run("server:app", host="0.0.0.0", port=PORT)
