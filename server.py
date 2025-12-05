@@ -101,7 +101,6 @@ async def websocket_endpoint(ws: WebSocket):
                     return
 
                 PLAYERS[pseudo] = {
-                    save_player_to_data(pseudo)
                     "password": hash_pw(password),
                     "x": 0, "y": 1, "z": 0,
                     "pv": 100,
@@ -109,6 +108,8 @@ async def websocket_endpoint(ws: WebSocket):
                     "endu": 80,
                     "inventory": []
                 }
+                save_player_to_data(pseudo)
+                save_player(pseudo)
                 await ws.send_text(json.dumps({"auth": "OK"}))
 
             else:
@@ -123,7 +124,6 @@ async def websocket_endpoint(ws: WebSocket):
                     return
 
                 await ws.send_text(json.dumps({"auth": "OK"}))
-            save_player(pseudo)
             CLIENTS[pseudo] = ws
             print(f"[+] {pseudo} connecté")
 
