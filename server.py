@@ -147,4 +147,4 @@ async def startup_event():
 # START FASTAPI UVICORN
 # --------------------------
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=PORT)
+    uvicorn.run("server:app", host="0.0.0.0", port=PORT, ws="websockets")
