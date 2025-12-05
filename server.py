@@ -14,6 +14,64 @@ app = FastAPI()
 PLAYERS = {}   # pseudo -> player data
 CLIENTS = {}   # pseudo -> websocket
 LOCK = asyncio.Lock()
+SAVE_DIR = "players"
+DATA_DIR = "data"
+
+def ensure_save_folder():
+    if not os.path.exists(SAVE_DIR):
+        os.makedirs(SAVE_DIR)
+
+def player_file(pseudo):
+    return os.path.join(SAVE_DIR, f"{pseudo}.txt")
+
+def save_player(pseudo):
+    ensure_save_folder()
+    try:
+        with open(player_file(pseudo), "w", encoding="utf-8") as f:
+            json.dump(PLAYERS[pseudo], f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print("[SAVE ERROR]", e)
+
+def load_players():
+    ensure_save_folder()
+    global PLAYERS
+
+    for fname in os.listdir(SAVE_DIR):
+        if fname.endswith(".txt"):
+            pseudo = fname.replace(".txt", "")
+            try:
+                with open(player_file(pseudo), "r", encoding="utf-8") as f:
+                    PLAYERS[pseudo] = json.load(f)
+            except:
+                pass
+
+def ensure_data_folder():
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+
+def player_file_path(pseudo):
+    return os.path.join(DATA_DIR, f"{pseudo}.txt")
+
+def save_player_to_data(pseudo):
+    ensure_data_folder()
+    try:
+        with open(player_file_path(pseudo), "w", encoding="utf-8") as f:
+            json.dump(PLAYERS[pseudo], f, indent=2)
+    except Exception as e:
+        print("Save DATA error:", e)
+
+def load_players_from_data():
+    ensure_data_folder()
+    for file in os.listdir(DATA_DIR):
+        if file.endswith(".txt"):
+            pseudo = file[:-4]
+            try:
+                with open(player_file_path(pseudo), "r", encoding="utf-8") as f:
+                    PLAYERS[pseudo] = json.load(f)
+            except:
+                print("Load DATA error:", file)
+
+
 
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -43,6 +101,7 @@ async def websocket_endpoint(ws: WebSocket):
                     return
 
                 PLAYERS[pseudo] = {
+                    save_player_to_data(pseudo)
                     "password": hash_pw(password),
                     "x": 0, "y": 1, "z": 0,
                     "pv": 100,
@@ -64,7 +123,7 @@ async def websocket_endpoint(ws: WebSocket):
                     return
 
                 await ws.send_text(json.dumps({"auth": "OK"}))
-
+            save_player(pseudo)
             CLIENTS[pseudo] = ws
             print(f"[+] {pseudo} connecté")
 
@@ -88,6 +147,8 @@ async def websocket_endpoint(ws: WebSocket):
                 PLAYERS[pseudo]["x"] = packet.get("x", PLAYERS[pseudo]["x"])
                 PLAYERS[pseudo]["y"] = packet.get("y", PLAYERS[pseudo]["y"])
                 PLAYERS[pseudo]["z"] = packet.get("z", PLAYERS[pseudo]["z"])
+                save_player(pseudo)
+                save_player_to_data(pseudo)
 
     except WebSocketDisconnect:
         pass
@@ -139,6 +200,8 @@ async def broadcast_loop():
 
 @app.on_event("startup")
 async def startup_event():
+    load_players_from_data()
+    load_players()
     print(f"[*] WebSocket server listening on port {PORT}")
     asyncio.create_task(broadcast_loop())
 
