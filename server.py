@@ -4,12 +4,23 @@ import time
 import hashlib
 import asyncio
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 PORT = int(os.environ.get("PORT", "10000"))
 SERVER_TICK = 30
 
 app = FastAPI()
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 PLAYERS = {}   # pseudo -> player data
 CLIENTS = {}   # pseudo -> websocket
@@ -23,6 +34,8 @@ DEV_CREDENTIALS = {
     "dev": hashlib.sha256("dev123".encode()).hexdigest()
 }
 PATCHES = []
+
+SERVER_START_TIME = time.time()
 
 def ensure_save_folder():
     if not os.path.exists(SAVE_DIR):
@@ -77,8 +90,6 @@ def load_players_from_data():
                     PLAYERS[pseudo] = json.load(f)
             except:
                 print("Load DATA error:", file)
-
-
 
 def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
@@ -315,8 +326,37 @@ async def api_get_patches():
         return {"patches": PATCHES}
 
 
+# Route pour servir le dashboard HTML
+@app.get("/")
+async def serve_root():
+    """Serve le dashboard principal"""
+    if os.path.exists("site_web_realtime.html"):
+        return FileResponse("site_web_realtime.html", media_type="text/html")
+    else:
+        return {"message": "Dashboard non trouvé. Lancez update_site.py pour le générer."}
+
+@app.get("/dashboard")
+async def serve_dashboard():
+    """Alias pour /"""
+    return await serve_root()
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "uptime": int(time.time() - SERVER_START_TIME),
+        "players_online": len(CLIENTS),
+        "total_players": len(PLAYERS)
+    }
+
+
 # --------------------------
 # START FASTAPI UVICORN
 # --------------------------
 if __name__ == "__main__":
+    print(f"\n🎮 Serveur MMO en ligne")
+    print(f"📊 Dashboard: http://localhost:{PORT}/")
+    print(f"🔌 WebSocket: wss://beta-game-w99g.onrender.com/ws")
+    print(f"❤️ Health: http://localhost:{PORT}/health\n")
     uvicorn.run("server:app", host="0.0.0.0", port=PORT, ws="websockets")
