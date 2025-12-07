@@ -3,7 +3,7 @@ import json
 import time
 import hashlib
 import asyncio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 import uvicorn
 
 PORT = int(os.environ.get("PORT", "10000"))
@@ -16,6 +16,13 @@ CLIENTS = {}   # pseudo -> websocket
 LOCK = asyncio.Lock()
 SAVE_DIR = "players"
 DATA_DIR = "data"
+
+# add dev credentials (hashed) and patches list
+DEV_CREDENTIALS = {
+    "admin": hashlib.sha256("admin123".encode()).hexdigest(),
+    "dev": hashlib.sha256("dev123".encode()).hexdigest()
+}
+PATCHES = []
 
 def ensure_save_folder():
     if not os.path.exists(SAVE_DIR):
@@ -172,24 +179,38 @@ async def broadcast_loop():
         await asyncio.sleep(1 / SERVER_TICK)
 
         async with LOCK:
-            data = {
-                "players": {
-                    p: {
-                        "x": PLAYERS[p]["x"],
-                        "y": PLAYERS[p]["y"],
-                        "z": PLAYERS[p]["z"]
-                    }
-                    for p in PLAYERS
+            # build players map
+            players_map = {
+                p: {
+                    "x": PLAYERS[p]["x"],
+                    "y": PLAYERS[p]["y"],
+                    "z": PLAYERS[p]["z"]
+                }
+                for p in PLAYERS
+            }
+            # status
+            uptime = int(time.time() - SERVER_START_TIME)
+            status = {
+                "uptime": uptime,
+                "players_online": len(CLIENTS),
+                "total_players": len(PLAYERS)
+            }
+            payload = {
+                "type": "update",
+                "data": {
+                    "players": players_map,
+                    "status": status,
+                    "patches": PATCHES
                 }
             }
 
-        msg = json.dumps(data)
+        msg = json.dumps(payload)
 
         remove = []
-        for pseudo, ws in CLIENTS.items():
+        for pseudo, ws in list(CLIENTS.items()):
             try:
                 await ws.send_text(msg)
-            except:
+            except Exception:
                 remove.append(pseudo)
 
         async with LOCK:
@@ -204,6 +225,94 @@ async def startup_event():
     load_players()
     print(f"[*] WebSocket server listening on port {PORT}")
     asyncio.create_task(broadcast_loop())
+
+
+# ---- new HTTP API: auth, patch management ----
+
+@app.post("/api/auth")
+async def api_auth(req: Request):
+    """
+    Body JSON: { pseudo, password, register (bool) }
+    Returns: { auth: "OK" | error, role: "dev"|"player" }
+    """
+    data = await req.json()
+    pseudo = data.get("pseudo")
+    password = data.get("password", "")
+    register = bool(data.get("register", False))
+
+    if not pseudo:
+        return {"auth": "NO_PSEUDO"}
+
+    # dev login
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    if pseudo in DEV_CREDENTIALS:
+        if DEV_CREDENTIALS[pseudo] == pw_hash:
+            return {"auth": "OK", "role": "dev"}
+        else:
+            return {"auth": "BADPW"}
+
+    # player login/register
+    async with LOCK:
+        if register:
+            if pseudo in PLAYERS:
+                return {"auth": "EXISTS"}
+            PLAYERS[pseudo] = {
+                "password": hashlib.sha256(password.encode()).hexdigest(),
+                "x": 0, "y": 1, "z": 0,
+                "pv": 100,
+                "mana": 50,
+                "endu": 80,
+                "inventory": []
+            }
+            save_player_to_data(pseudo)
+            save_player(pseudo)
+            return {"auth": "OK", "role": "player"}
+        else:
+            if pseudo not in PLAYERS:
+                return {"auth": "NOUSER"}
+            if PLAYERS[pseudo]["password"] != hashlib.sha256(password.encode()).hexdigest():
+                return {"auth": "BADPW"}
+            return {"auth": "OK", "role": "player"}
+
+@app.post("/api/patch")
+async def api_post_patch(req: Request):
+    """
+    Body JSON: { version, title, description, type, author }
+    Requires: dev auth (simple header Authorization: Basic dev:pw or include author who must be a dev)
+    For simplicity: accepts requests where author matches a dev pseudo known in DEV_CREDENTIALS.
+    """
+    data = await req.json()
+    author = data.get("author")
+    if not author or author not in DEV_CREDENTIALS:
+        return {"ok": False, "error": "unauthorized"}
+
+    patch = {
+        "version": data.get("version"),
+        "title": data.get("title"),
+        "description": data.get("description"),
+        "type": data.get("type"),
+        "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "author": author
+    }
+    async with LOCK:
+        PATCHES.insert(0, patch)
+        # persist patches to disk
+        try:
+            with open(os.path.join(DATA_DIR, "patches.json"), "w", encoding="utf-8") as f:
+                json.dump(PATCHES, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    return {"ok": True, "patch": patch}
+
+@app.get("/api/patches")
+async def api_get_patches():
+    # load from disk if exists
+    try:
+        with open(os.path.join(DATA_DIR, "patches.json"), "r", encoding="utf-8") as f:
+            p = json.load(f)
+            return {"patches": p}
+    except:
+        return {"patches": PATCHES}
 
 
 # --------------------------
