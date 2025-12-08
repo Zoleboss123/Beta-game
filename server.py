@@ -37,6 +37,9 @@ PATCHES = []
 
 SERVER_START_TIME = time.time()
 
+# Stocker les positions actuelles pour les HTTP requests
+PLAYER_POSITIONS = {}  # pseudo -> {x, y, z}
+
 def ensure_save_folder():
     if not os.path.exists(SAVE_DIR):
         os.makedirs(SAVE_DIR)
@@ -324,6 +327,50 @@ async def api_get_patches():
             return {"patches": p}
     except:
         return {"patches": PATCHES}
+
+
+@app.post("/api/player/position")
+async def update_player_position(req: Request):
+    """Reçoit la position du joueur via HTTP"""
+    data = await req.json()
+    pseudo = data.get("pseudo")
+    
+    if pseudo and pseudo in PLAYERS:
+        async with LOCK:
+            PLAYERS[pseudo]["x"] = data.get("x", PLAYERS[pseudo]["x"])
+            PLAYERS[pseudo]["y"] = data.get("y", PLAYERS[pseudo]["y"])
+            PLAYERS[pseudo]["z"] = data.get("z", PLAYERS[pseudo]["z"])
+            
+            PLAYER_POSITIONS[pseudo] = {
+                "x": PLAYERS[pseudo]["x"],
+                "y": PLAYERS[pseudo]["y"],
+                "z": PLAYERS[pseudo]["z"]
+            }
+            
+            save_player(pseudo)
+            save_player_to_data(pseudo)
+    
+    return {"ok": True}
+
+@app.post("/api/projectile")
+async def handle_projectile(req: Request):
+    """Reçoit un projectile et teste les collisions"""
+    data = await req.json()
+    pseudo = data.get("pseudo")
+    x = data.get("x", 0)
+    z = data.get("z", 0)
+    damage = data.get("damage", 20)
+    
+    # Tester les collisions avec les ennemis
+    # (À implémenter selon la logique du jeu)
+    
+    return {"ok": True}
+
+@app.get("/api/players/positions")
+async def get_all_positions():
+    """Retourne les positions de tous les joueurs"""
+    with lock:
+        return {"positions": PLAYER_POSITIONS}
 
 
 # Route pour servir le dashboard HTML
