@@ -3,6 +3,7 @@ import json
 import time
 import hashlib
 import asyncio
+import random
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -371,6 +372,76 @@ async def get_all_positions():
     """Retourne les positions de tous les joueurs"""
     with lock:
         return {"positions": PLAYER_POSITIONS}
+
+
+# new: chunk configuration
+CHUNK_SIZE = 50  # units per chunk (must match client)
+MAX_ROCKS_PER_CHUNK = 6
+MAX_TREES_PER_CHUNK = 5
+MAX_HOUSES_PER_CHUNK = 1
+MAX_ENEMIES_PER_CHUNK = 3
+
+
+@app.get("/api/chunks")
+async def api_get_chunks(cx: int, cz: int, r: int = 1):
+    """
+    Retourne les chunks dans un rayon r autour du chunk (cx, cz).
+    Query params: cx (int), cz (int), r (int)
+    Response: { "chunks": { "<cx>,<cz>": [ {type,x,y,z,scale,...}, ... ], ... } }
+    """
+    result = {}
+    for ci in range(cx - r, cx + r + 1):
+        for cj in range(cz - r, cz + r + 1):
+            key = f"{ci},{cj}"
+            # deterministic RNG per chunk
+            seed = (ci & 0xffffffff) << 32 ^ (cj & 0xffffffff)
+            rng = random.Random(seed)
+            objs = []
+            # rocks
+            for _ in range(rng.randint(0, MAX_ROCKS_PER_CHUNK)):
+                local_x = rng.uniform(0, CHUNK_SIZE)
+                local_z = rng.uniform(0, CHUNK_SIZE)
+                world_x = ci * CHUNK_SIZE + local_x
+                world_z = cj * CHUNK_SIZE + local_z
+                scale = rng.uniform(0.8, 3.0)
+                objs.append({"type": "Rock", "x": world_x, "y": 0, "z": world_z, "scale": scale})
+            # trees
+            for _ in range(rng.randint(0, MAX_TREES_PER_CHUNK)):
+                local_x = rng.uniform(0, CHUNK_SIZE)
+                local_z = rng.uniform(0, CHUNK_SIZE)
+                world_x = ci * CHUNK_SIZE + local_x
+                world_z = cj * CHUNK_SIZE + local_z
+                trunk_h = rng.uniform(2, 4)
+                trunk_r = rng.uniform(0.2, 0.6)
+                leaf_r = rng.uniform(1.0, 2.5)
+                fruit_count = rng.randint(0, 3)
+                objs.append({
+                    "type": "Tree",
+                    "x": world_x, "y": 0, "z": world_z,
+                    "trunk_height": trunk_h, "trunk_radius": trunk_r,
+                    "leaf_radius": leaf_r, "fruit_count": fruit_count
+                })
+            # houses (rare)
+            if rng.random() < 0.08:
+                local_x = rng.uniform(0, CHUNK_SIZE)
+                local_z = rng.uniform(0, CHUNK_SIZE)
+                world_x = ci * CHUNK_SIZE + local_x
+                world_z = cj * CHUNK_SIZE + local_z
+                objs.append({"type": "House", "x": world_x, "y": 0, "z": world_z})
+            # enemies
+            for _ in range(rng.randint(0, MAX_ENEMIES_PER_CHUNK)):
+                if rng.random() < 0.4:
+                    local_x = rng.uniform(0, CHUNK_SIZE)
+                    local_z = rng.uniform(0, CHUNK_SIZE)
+                    world_x = ci * CHUNK_SIZE + local_x
+                    world_z = cj * CHUNK_SIZE + local_z
+                    speed = rng.uniform(1.0, 3.0)
+                    damage = rng.uniform(3, 10)
+                    hp = rng.uniform(50, 120)
+                    objs.append({"type": "Enemy", "x": world_x, "y": 1, "z": world_z,
+                                 "speed": speed, "damage": damage, "hp": hp})
+            result[key] = objs
+    return {"chunks": result}
 
 
 # Route pour servir le dashboard HTML
