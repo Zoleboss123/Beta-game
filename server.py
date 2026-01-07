@@ -108,6 +108,16 @@ def hash_pw(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
 
+@app.get("/api/dbtest")
+async def db_test():
+    try:
+        res = supabase.table("players").select("pseudo").limit(5).execute()
+        return {"ok": True, "players": res.data}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
