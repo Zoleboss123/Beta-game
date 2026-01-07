@@ -174,10 +174,7 @@ async def api_auth(req: Request):
 
     
 
-    except Exception as e:
-        print("Auth error:", e)
-        await ws.close()
-        return
+
 
     # ----------------------
     # RECEIVE LOOP
