@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_URL = "https://cgoqgmxhqhunmcdaixvd.supabase.co"
+SUPABASE_KEY = "sb_secret_RdTvzm5lAta74JArLSHrNQ_eimbOX-V"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
