@@ -8,6 +8,15 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from supabase import create_client
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 PORT = int(os.environ.get("PORT", "10000"))
 SERVER_TICK = 30
@@ -240,6 +249,9 @@ async def startup_event():
     load_players()
     print(f"[*] WebSocket server listening on port {PORT}")
     asyncio.create_task(broadcast_loop())
+    res = supabase.table("players").select("pseudo").limit(1).execute()
+    print("[SUPABASE TEST]", res.data)
+
 
 
 # ---- new HTTP API: auth, patch management ----
