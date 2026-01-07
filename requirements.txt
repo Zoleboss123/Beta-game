@@ -2,4 +2,5 @@ fastapi
 uvicorn[standard]
 supabase 
 python-dotenv
+websockets
 
