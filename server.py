@@ -135,38 +135,26 @@ async def websocket_endpoint(ws: WebSocket):
         register = login["register"]
 
         async with LOCK:
-            if register:
-                if pseudo in PLAYERS:
-                    await ws.send_text(json.dumps({"auth": "EXISTS"}))
-                    await ws.close()
-                    return
-
-                PLAYERS[pseudo] = {
-                    "password": hash_pw(password),
-                    "x": 0, "y": 1, "z": 0,
-                    "pv": 100,
-                    "mana": 50,
-                    "endu": 80,
-                    "inventory": []
-                }
-                save_player_to_data(pseudo)
-                save_player(pseudo)
-                await ws.send_text(json.dumps({"auth": "OK"}))
-
-            else:
-                if pseudo not in PLAYERS:
+            if not register:
+                res = supabase.table("players").select("*").eq("pseudo", pseudo).single().execute()
+                if not res.data:
                     await ws.send_text(json.dumps({"auth": "NOUSER"}))
                     await ws.close()
                     return
 
-                if PLAYERS[pseudo]["password"] != hash_pw(password):
+                player = res.data
+                if player["password"] != hash_pw(password):
                     await ws.send_text(json.dumps({"auth": "BADPW"}))
                     await ws.close()
                     return
 
+                PLAYERS[pseudo] = player
+                CLIENTS[pseudo] = ws
+
                 await ws.send_text(json.dumps({"auth": "OK"}))
-            CLIENTS[pseudo] = ws
-            print(f"[+] {pseudo} connecté")
+                print(f"[+] {pseudo} connecté (login)")
+
+    
 
     except Exception as e:
         print("Auth error:", e)
@@ -188,8 +176,17 @@ async def websocket_endpoint(ws: WebSocket):
                 PLAYERS[pseudo]["x"] = packet.get("x", PLAYERS[pseudo]["x"])
                 PLAYERS[pseudo]["y"] = packet.get("y", PLAYERS[pseudo]["y"])
                 PLAYERS[pseudo]["z"] = packet.get("z", PLAYERS[pseudo]["z"])
-                save_player(pseudo)
-                save_player_to_data(pseudo)
+
+            # save batch toutes les 5s
+            now = time.time()
+            if now - LAST_SAVE.get(pseudo, 0) > 5:
+                LAST_SAVE[pseudo] = now
+                supabase.table("players").update({
+                    "x": PLAYERS[pseudo]["x"],
+                    "y": PLAYERS[pseudo]["y"],
+                    "z": PLAYERS[pseudo]["z"]
+                }).eq("pseudo", pseudo).execute()
+
 
     except WebSocketDisconnect:
         pass
@@ -291,19 +288,32 @@ async def api_auth(req: Request):
     # player login/register
     async with LOCK:
         if register:
-            if pseudo in PLAYERS:
-                return {"auth": "EXISTS"}
-            PLAYERS[pseudo] = {
-                "password": hashlib.sha256(password.encode()).hexdigest(),
-                "x": 0, "y": 1, "z": 0,
+            # vérifier si pseudo existe
+            res = supabase.table("players").select("*").eq("pseudo", pseudo).execute()
+            if res.data:
+                await ws.send_text(json.dumps({"auth": "EXISTS"}))
+                await ws.close()
+                return
+
+            # créer joueur
+            player = {
+                "pseudo": pseudo,
+                "password": hash_pw(password),
+                "x": 0,
+                "y": 1,
+                "z": 0,
                 "pv": 100,
                 "mana": 50,
                 "endu": 80,
                 "inventory": []
             }
-            save_player_to_data(pseudo)
-            save_player(pseudo)
-            return {"auth": "OK", "role": "player"}
+            supabase.table("players").insert(player).execute()
+            PLAYERS[pseudo] = player
+            CLIENTS[pseudo] = ws
+
+            await ws.send_text(json.dumps({"auth": "OK"}))
+            print(f"[+] {pseudo} connecté (register)")
+
         else:
             if pseudo not in PLAYERS:
                 return {"auth": "NOUSER"}
