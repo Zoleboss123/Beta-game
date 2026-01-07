@@ -118,41 +118,59 @@ async def db_test():
 
 
 
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    await ws.accept()
-    pseudo = None
+@app.post("/api/auth")
+async def api_auth(req: Request):
+    """
+    Body JSON: { pseudo, password, register (bool) }
+    Returns: { auth: "OK" | error, role: "dev"|"player" }
+    """
+    data = await req.json()
+    pseudo = data.get("pseudo")
+    password = data.get("password", "")
+    register = bool(data.get("register", False))
 
-    # ----------------------
-    # AUTH PART
-    # ----------------------
-    try:
-        raw = await ws.receive_text()
-        login = json.loads(raw)
+    if not pseudo:
+        return {"auth": "NO_PSEUDO"}
 
-        pseudo = login["pseudo"]
-        password = login["password"]
-        register = login["register"]
+    # dev login
+    pw_hash = hashlib.sha256(password.encode()).hexdigest()
+    if pseudo in DEV_CREDENTIALS:
+        if DEV_CREDENTIALS[pseudo] == pw_hash:
+            return {"auth": "OK", "role": "dev"}
+        else:
+            return {"auth": "BADPW"}
 
-        async with LOCK:
-            if not register:
-                res = supabase.table("players").select("*").eq("pseudo", pseudo).single().execute()
-                if not res.data:
-                    await ws.send_text(json.dumps({"auth": "NOUSER"}))
-                    await ws.close()
-                    return
+    # player login/register
+    async with LOCK:
+        if register:
+            # ici on fait la vérif via Supabase
+            res = supabase.table("players").select("*").eq("pseudo", pseudo).execute()
+            if res.data:
+                return {"auth": "EXISTS"}   # <-- juste return, pas ws.send_text
+            player = {
+                "pseudo": pseudo,
+                "password": hashlib.sha256(password.encode()).hexdigest(),
+                "x": 0,
+                "y": 1,
+                "z": 0,
+                "pv": 100,
+                "mana": 50,
+                "endu": 80,
+                "inventory": []
+            }
+            supabase.table("players").insert(player).execute()
+            PLAYERS[pseudo] = player
+            return {"auth": "OK", "role": "player"}
+        else:
+            res = supabase.table("players").select("*").eq("pseudo", pseudo).single().execute()
+            if not res.data:
+                return {"auth": "NOUSER"}
+            player = res.data
+            if player["password"] != hashlib.sha256(password.encode()).hexdigest():
+                return {"auth": "BADPW"}
+            PLAYERS[pseudo] = player
+            return {"auth": "OK", "role": "player"}
 
-                player = res.data
-                if player["password"] != hash_pw(password):
-                    await ws.send_text(json.dumps({"auth": "BADPW"}))
-                    await ws.close()
-                    return
-
-                PLAYERS[pseudo] = player
-                CLIENTS[pseudo] = ws
-
-                await ws.send_text(json.dumps({"auth": "OK"}))
-                print(f"[+] {pseudo} connecté (login)")
 
     
 
