@@ -43,7 +43,7 @@ DEV_CREDENTIALS = {
     "admin": hashlib.sha256("admin123".encode()).hexdigest(),
     "dev": hashlib.sha256("dev123".encode()).hexdigest()
 }
-PATCHES = []
+
 
 SERVER_START_TIME = time.time()
 
@@ -241,12 +241,25 @@ async def broadcast_loop():
                 "players_online": len(CLIENTS),
                 "total_players": len(PLAYERS)
             }
+
+            try:
+                pres = supabase.table("patches") \
+                    .select("*") \
+                    .order("id", desc=True) \
+                    .limit(10) \
+                    .execute()
+                patches = pres.data
+            except Exception as e:
+                print("PATCH WS LOAD ERROR:", e)
+                patches = []
+
+            
             payload = {
                 "type": "update",
                 "data": {
                     "players": players_map,
                     "status": status,
-                    "patches": PATCHES
+                    "patches": patches
                 }
             }
 
@@ -338,13 +351,10 @@ async def api_auth(req: Request):
 
 @app.post("/api/patch")
 async def api_post_patch(req: Request):
-    """
-    Body JSON: { version, title, description, type, author }
-    Requires: dev auth (simple header Authorization: Basic dev:pw or include author who must be a dev)
-    For simplicity: accepts requests where author matches a dev pseudo known in DEV_CREDENTIALS.
-    """
     data = await req.json()
     author = data.get("author")
+
+    # simple sécurité dev
     if not author or author not in DEV_CREDENTIALS:
         return {"ok": False, "error": "unauthorized"}
 
@@ -353,28 +363,29 @@ async def api_post_patch(req: Request):
         "title": data.get("title"),
         "description": data.get("description"),
         "type": data.get("type"),
-        "date": time.strftime("%Y-%m-%d %H:%M:%S"),
         "author": author
     }
-    async with LOCK:
-        PATCHES.insert(0, patch)
-        # persist patches to disk
-        try:
-            with open(os.path.join(DATA_DIR, "patches.json"), "w", encoding="utf-8") as f:
-                json.dump(PATCHES, f, ensure_ascii=False, indent=2)
-        except:
-            pass
-    return {"ok": True, "patch": patch}
+
+    try:
+        supabase.table("patches").insert(patch).execute()
+        return {"ok": True, "patch": patch}
+    except Exception as e:
+        print("PATCH INSERT ERROR:", e)
+        return {"ok": False, "error": str(e)}
 
 @app.get("/api/patches")
 async def api_get_patches():
-    # load from disk if exists
     try:
-        with open(os.path.join(DATA_DIR, "patches.json"), "r", encoding="utf-8") as f:
-            p = json.load(f)
-            return {"patches": p}
-    except:
-        return {"patches": PATCHES}
+        res = supabase.table("patches") \
+            .select("*") \
+            .order("id", desc=True) \
+            .limit(50) \
+            .execute()
+
+        return {"patches": res.data}
+    except Exception as e:
+        print("PATCH LOAD ERROR:", e)
+        return {"patches": [], "error": str(e)}
 
 
 @app.post("/api/player/position")
