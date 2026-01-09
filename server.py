@@ -37,12 +37,14 @@ CLIENTS = {}   # pseudo -> websocket
 LOCK = asyncio.Lock()
 SAVE_DIR = "players"
 DATA_DIR = "data"
+DEV_WHITELIST = False
 
 # add dev credentials (hashed) and patches list
 DEV_CREDENTIALS = {
     "admin": hashlib.sha256("admin123".encode()).hexdigest(),
     "dev": hashlib.sha256("dev123".encode()).hexdigest()
-}
+}   
+
 
 
 SERVER_START_TIME = time.time()
@@ -142,7 +144,7 @@ async def api_auth(req: Request):
 
     # player login/register
     async with LOCK:
-        if register:
+        if register and DEV_WHITELIST:
             # ici on fait la vérif via Supabase
             res = supabase.table("players").select("*").eq("pseudo", pseudo).execute()
             if res.data:
@@ -315,7 +317,7 @@ async def api_auth(req: Request):
 
     # player login/register
     async with LOCK:
-        if register:
+        if register and DEV_WHITELIST:
             # vérifier si pseudo existe
             res = supabase.table("players").select("*").eq("pseudo", pseudo).execute()
             if res.data:
@@ -394,7 +396,7 @@ async def update_player_position(req: Request):
     data = await req.json()
     pseudo = data.get("pseudo")
     
-    if pseudo and pseudo in PLAYERS:
+    if pseudo and pseudo in PLAYERS and DEV_WHITELIST:
         async with LOCK:
             PLAYERS[pseudo]["x"] = data.get("x", PLAYERS[pseudo]["x"])
             PLAYERS[pseudo]["y"] = data.get("y", PLAYERS[pseudo]["y"])
@@ -525,6 +527,17 @@ async def health_check():
         "players_online": len(CLIENTS),
         "total_players": len(PLAYERS)
     }
+
+@app.get("/white_list_dev")
+async def white_list_dev():
+    """Tout les roles joueurs ne peuvent pas se logger"""
+    global DEV_WHITELIST
+    if DEV_WHITELIST:
+        DEV_WHITELIST = False
+    else:
+        DEV_WHITELIST = True
+
+
 
 
 # --------------------------
